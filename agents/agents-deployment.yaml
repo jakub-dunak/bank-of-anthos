@@ -1,0 +1,432 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents-ns
+  labels:
+    name: agents-ns
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agents-config
+  namespace: agents-ns
+data:
+  # Monitoring Agent Configuration
+  MONITORING_INTERVAL: "30"
+  MOCK_JWT_TOKEN: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.mock.jwt.token.for.demo.purposes.only"
+
+  # Validation Agent Configuration
+  GCP_PROJECT_ID: "${PROJECT_ID}"
+  GCP_LOCATION: "${GCP_LOCATION}"
+
+  # Audit Agent Configuration
+  AUDIT_LOG_PATH: "/tmp/audit_log.json"
+  REPORT_INTERVAL_MINUTES: "60"
+
+  # Shared Configuration
+  LOG_LEVEL: "INFO"
+---
+# Using emptyDir for shared storage since GKE Autopilot doesn't support ReadWriteMany PVCs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monitoring-agent
+  namespace: agents-ns
+  labels:
+    app: monitoring-agent
+    component: consent-choreographer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monitoring-agent
+  template:
+    metadata:
+      labels:
+        app: monitoring-agent
+        component: consent-choreographer
+    spec:
+      volumes:
+      - name: shared-storage
+        emptyDir: {}
+      serviceAccountName: agents-sa
+      containers:
+      - name: monitoring-agent
+        image: us-central1-docker.pkg.dev/${PROJECT_ID}/consent-agents/monitoring-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: health
+        envFrom:
+        - configMapRef:
+            name: agents-config
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: monitoring-agent-service
+  namespace: agents-ns
+  labels:
+    app: monitoring-agent
+    component: consent-choreographer
+spec:
+  selector:
+    app: monitoring-agent
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: health
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: monitoring-agent-hpa
+  namespace: agents-ns
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: monitoring-agent
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: validation-agent
+  namespace: agents-ns
+  labels:
+    app: validation-agent
+    component: consent-choreographer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: validation-agent
+  template:
+    metadata:
+      labels:
+        app: validation-agent
+        component: consent-choreographer
+    spec:
+      volumes:
+      - name: shared-storage
+        emptyDir: {}
+      serviceAccountName: agents-sa
+      containers:
+      - name: validation-agent
+        image: us-central1-docker.pkg.dev/${PROJECT_ID}/consent-agents/validation-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: health
+        envFrom:
+        - configMapRef:
+            name: agents-config
+        env:
+        - name: GOOGLE_API_KEY
+          value: "${GOOGLE_API_KEY}"
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: validation-agent-service
+  namespace: agents-ns
+  labels:
+    app: validation-agent
+    component: consent-choreographer
+spec:
+  selector:
+    app: validation-agent
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: health
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: validation-agent-hpa
+  namespace: agents-ns
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: validation-agent
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-agent
+  namespace: agents-ns
+  labels:
+    app: audit-agent
+    component: consent-choreographer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-agent
+  template:
+    metadata:
+      labels:
+        app: audit-agent
+        component: consent-choreographer
+    spec:
+      volumes:
+      - name: shared-storage
+        emptyDir: {}
+      serviceAccountName: agents-sa
+      containers:
+      - name: audit-agent
+        image: us-central1-docker.pkg.dev/${PROJECT_ID}/consent-agents/audit-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: health
+        envFrom:
+        - configMapRef:
+            name: agents-config
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-agent-service
+  namespace: agents-ns
+  labels:
+    app: audit-agent
+    component: consent-choreographer
+spec:
+  selector:
+    app: audit-agent
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: health
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: audit-agent-hpa
+  namespace: agents-ns
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: audit-agent
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit-dashboard
+  namespace: agents-ns
+  labels:
+    app: streamlit-dashboard
+    component: consent-choreographer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamlit-dashboard
+  template:
+    metadata:
+      labels:
+        app: streamlit-dashboard
+        component: consent-choreographer
+    spec:
+      volumes:
+      - name: shared-storage
+        emptyDir: {}
+      serviceAccountName: agents-sa
+      containers:
+      - name: streamlit-dashboard
+        image: us-central1-docker.pkg.dev/${PROJECT_ID}/consent-agents/streamlit-dashboard:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8501
+          name: http
+        envFrom:
+        - configMapRef:
+            name: agents-config
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-dashboard-service
+  namespace: agents-ns
+  labels:
+    app: streamlit-dashboard
+    component: consent-choreographer
+spec:
+  selector:
+    app: streamlit-dashboard
+  ports:
+  - port: 8501
+    targetPort: 8501
+    name: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: streamlit-dashboard-ingress
+  namespace: agents-ns
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "consent-dashboard-ip"
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: streamlit-dashboard-service
+            port:
+              number: 8501
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: streamlit-dashboard-hpa
+  namespace: agents-ns
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: streamlit-dashboard
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agents-sa
+  namespace: agents-ns
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agents-role
+  namespace: agents-ns
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agents-rolebinding
+  namespace: agents-ns
+subjects:
+- kind: ServiceAccount
+  name: agents-sa
+  namespace: agents-ns
+roleRef:
+  kind: Role
+  name: agents-role
+  apiGroup: rbac.authorization.k8s.io
